@@ -1,11 +1,9 @@
-import { fork } from "child_process";
-import cluster from "cluster";
 import csv from "csv-parser";
-import fs, { createReadStream } from 'fs';
-import os, { availableParallelism } from "os"
+import fs from 'fs';
 import path from "path";
+import { isMainThread, parentPort, Worker } from "worker_threads";
 
-if (cluster.isPrimary) {
+if (isMainThread) {
 
   const data = process.argv[2]
   let csvs = fs.readdirSync(data).filter((e) => path.extname(e) === ".csv")
@@ -14,32 +12,27 @@ if (cluster.isPrimary) {
     throw "There isn't any csv files"
   }
 
-  let minCores = Math.min(csvs.length, os.availableParallelism())
-
-  for (let i = 0; i < minCores; i++) {
-    cluster.fork();
-  }
-
+  let minCores = Math.min(csvs.length, 10)
   let tasks = distribution(csvs, minCores)
 
-  cluster.on('message', (worker, msg) => {
-    if (msg.ready) {
-      worker.send(tasks[worker.id - 1])
-    }
-  })
+  for (let i = 0; i < minCores; i++) {
+    let worker = new Worker("./")
+    worker.on('online', () => {
+      worker.postMessage(tasks[i])
 
-
-} else {
-  process.send({ ready: true })
-
+    })
+  }
+}
+else {
   let allProm = []
 
-  process.on('message', (collection) => {
+  parentPort.on('message', (collection) => {
     for (let i = 0; i < collection.length; i++) {
       allProm.push(parseFiles(collection[i]))
     }
+
     Promise.all(allProm).then(() => {
-      process.kill(process.pid)
+      parentPort.close()
     })
   })
 
@@ -58,7 +51,7 @@ function parseFiles(file) {
         parsedData.push(data)
       })
       .on('end', () => {
-        if (!fs.existsSync(path.join(process.argv[2], "converted"))) {
+        if (!fs.existsSync(path.join("./", "converted"))) {
           fs.mkdirSync("converted")
         }
 
@@ -85,7 +78,7 @@ function distribution(allFiles, cores) {
 
 
   for (let i = 0, j = 0; i < allFiles.length; i++) {
-    files[j++].push(allFiles[i]);
+    files[j++].push(path.resolve(process.argv[2], allFiles[i]));
     if (j == cores) j = 0
   }
 
